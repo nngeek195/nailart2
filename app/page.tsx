@@ -1,65 +1,63 @@
-import Image from "next/image";
+"use client";
+import TemplateCard from "@/components/TemplateCard";
+
+const TEMPLATES = Array.from({ length: 8 }).map((_, i) => ({
+  id: String(i),
+  title: `Galaxy Chrome ${i + 1}`,
+  image: `https://picsum.photos/seed/nail${i}/400/500`,
+  tags: i % 2 === 0 ? ["Chrome", "Summer"] : ["Matte", "Wedding"],
+}));
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="pt-24 px-8 max-w-7xl mx-auto pb-20">
+
+      {/* 1. COLORFUL HERO SECTION */}
+      <div className="relative mb-12 rounded-3xl overflow-hidden bg-white shadow-xl border border-gray-100">
+        {/* Gradient Background blob behind text */}
+        <div className="absolute top-0 right-0 w-64 h-64 bg-purple-300/30 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+        <div className="absolute bottom-0 left-0 w-64 h-64 bg-pink-300/30 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+
+        <div className="relative z-10 p-12 md:p-16 flex flex-col items-center text-center">
+
+
+          <h1 className="text-5xl md:text-7xl font-black text-gray-900 mb-6 leading-tight">
+            What will you wear <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#7D2AE8] via-[#FF4081] to-[#7D2AE8] bg-300% animate-gradient">
+              today?
+            </span>
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+
+          <p className="text-lg text-gray-500 max-w-2xl mb-8">
+            Transform your nail photos into professional designs instantly using our advanced AI engine.
           </p>
+
+          <div className="flex gap-4">
+            <button className="bg-gray-900 text-white px-8 py-3.5 rounded-xl font-bold hover:bg-black transition shadow-lg hover:scale-105 duration-200">
+              Start Creating
+            </button>
+            <button className="bg-white text-gray-700 border border-gray-300 px-8 py-3.5 rounded-xl font-bold hover:bg-gray-50 transition hover:scale-105 duration-200">
+              Browse Gallery
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+      </div>
+
+      {/* 2. CATEGORY PILLS */}
+      <div className="flex gap-4 overflow-x-auto pb-6 scrollbar-hide">
+        {["#Chrome", "#Nude", "#Floral", "#Matte", "#Glitter", "#Neon"].map((cat, i) => (
+          <button key={i} className="whitespace-nowrap px-6 py-2.5 rounded-full text-sm font-semibold transition-all border hover:shadow-md bg-white hover:bg-gray-50 hover:border-[#7D2AE8] hover:text-[#7D2AE8]">
+            {cat}
+          </button>
+        ))}
+      </div>
+
+      {/* 3. TEMPLATE GRID */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+        {TEMPLATES.map((t) => (
+          <TemplateCard key={t.id} template={t} />
+        ))}
+      </div>
     </div>
   );
 }
