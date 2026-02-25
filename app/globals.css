@@ -84,3 +84,26 @@ body {
     background-position: 100% center;
   }
 }
+
+/* Sidebar specific utility in globals.css */
+.sidebar-container {
+  width: 280px;
+  height: 100vh;
+  position: fixed;
+  left: 0;
+  top: 0;
+  background: white;
+  border-right: 1px solid #f1f1f1;
+  z-index: 50;
+  /* Ensures it stays above the grid */
+}
+
+/* Hide scrollbar for category list */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

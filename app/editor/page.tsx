@@ -1,165 +1,102 @@
 "use client";
-import { useState, useEffect } from "react"; // Added useEffect
-import { useAuth } from "@/providers/AuthProvider";
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { useState, useEffect } from "react";
 import { db } from "@/lib/firebase";
+import { collection, addDoc, query, where, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { useAuth } from "@/providers/AuthProvider";
 import { useRouter } from "next/navigation";
-import { Upload, Plus, AlertTriangle, CheckCircle, Clock, Loader2 } from "lucide-react";
+import { Plus, Loader2, Clock, CheckCircle, XCircle, Image as ImageIcon, Sparkles } from "lucide-react";
 
-// UPDATED TYPE: Added all fields found in Firestore
-type Template = {
-    id: string;
-    title: string;
-    status: "pending" | "approved" | "rejected";
-    adminComment?: string;
-    createdAt: any;
-    marketplaceImage: string; // <--- ADDED
-    referenceImage?: string; // <--- ADDED
-    tags?: string[]; // <--- ADDED
-};
-
-export default function EditorDashboard() {
-    const { appUser } = useAuth();
+export default function EditorPage() {
+    const { appUser, loading } = useAuth();
     const router = useRouter();
-    const [templates, setTemplates] = useState<Template[]>([]);
-    const [uploading, setUploading] = useState(false);
 
-    // Form State
     const [title, setTitle] = useState("");
-    const [beautyShot, setBeautyShot] = useState<File | null>(null);
-    const [aiRef, setAiRef] = useState<File | null>(null);
     const [tags, setTags] = useState("");
+    const [beautyUrl, setBeautyUrl] = useState("");
+    const [aiRefUrl, setAiRefUrl] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [mySubmissions, setMySubmissions] = useState<any[]>([]);
 
-    // 1. Fetch Editor's Templates (Real-time)
-    useEffect(() => { // <--- CHANGED useState to useEffect
-        if (!appUser) return;
+    // 1. Protection: Only Admin or Editor can access
+    useEffect(() => {
+        if (!loading && (!appUser || (appUser.role !== 'editor' && appUser.role !== 'admin'))) {
+            router.push("/");
+        }
+    }, [appUser, loading, router]);
+
+    // 2. Fetch Submissions
+    useEffect(() => {
+        if (!appUser?.uid) return;
         const q = query(collection(db, "templates"), where("createdBy", "==", appUser.uid));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Template[];
-            setTemplates(data);
+        return onSnapshot(q, (snapshot) => {
+            setMySubmissions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
         });
-        return () => unsubscribe();
     }, [appUser]);
 
-    // 2. Submit Template
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!beautyShot || !aiRef) return alert("Please upload both images.");
-        setUploading(true);
+
+        // Safety Guard: Prevent 'undefined' createdBy error
+        if (!appUser?.uid) {
+            alert("Session not ready. Please try again in a moment.");
+            return;
+        }
+
+        setIsSubmitting(true);
+        const tagArray = tags.split(",").map(t => t.trim()).filter(t => t !== "");
 
         try {
-            // MOCK UPLOAD: Replace with Cloudinary logic later
-            const beautyUrl = "https://picsum.photos/seed/beauty/400/500";
-            const aiRefUrl = "https://picsum.photos/seed/ai/400/500";
-
             await addDoc(collection(db, "templates"), {
-                title,
+                title: title.trim(),
                 marketplaceImage: beautyUrl,
                 referenceImage: aiRefUrl,
-                tags: tags.split(",").map(t => t.trim()),
+                tags: tagArray,
                 status: "pending",
-                editorName: appUser?.username,
-                createdBy: appUser?.uid,
-                createdAt: serverTimestamp(),
+                editorName: appUser.username || "Anonymous",
+                createdBy: appUser.uid,
+                createdAt: serverTimestamp()
             });
-
-            // Reset Form
-            setTitle("");
-            setTags("");
-            setBeautyShot(null);
-            setAiRef(null);
-            alert("Template Submitted for Review!");
+            setTitle(""); setTags(""); setBeautyUrl(""); setAiRefUrl("");
+            alert("Submitted for Admin review!");
         } catch (err) {
-            console.error(err);
-            alert("Submission failed.");
+            console.error("Upload Error:", err);
         } finally {
-            setUploading(false);
+            setIsSubmitting(false);
         }
     };
 
-    if (!appUser || (appUser.role !== "editor" && appUser.role !== "admin")) {
-        return <div className="p-10 text-center">Access Denied. Editors Only.</div>;
+    if (loading || (appUser?.role !== 'admin' && appUser?.role !== 'editor')) {
+        return <div className="p-20 text-center"><Loader2 className="animate-spin mx-auto" /></div>;
     }
 
     return (
-        <div className="max-w-5xl mx-auto pt-10 animate-in fade-in slide-in-from-bottom-4">
-            <div className="mb-8">
-                <h1 className="text-3xl font-bold text-gray-900">Creator Studio</h1>
-                <p className="text-gray-500">Manage your marketplace submissions and track approvals.</p>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* LEFT: Upload Form */}
-                <div className="lg:col-span-1 space-y-6">
-                    <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                        <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-                            <Plus className="text-[#7D2AE8]" /> New Template
-                        </h3>
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            <div>
-                                <label className="text-sm font-medium text-gray-700 mb-1 block">Title</label>
-                                <input value={title} onChange={e => setTitle(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="e.g. Neon Summer" required />
-                            </div>
-
-                            <div>
-                                <label className="text-sm font-medium text-gray-700 mb-1 block">Beauty Shot (Marketplace)</label>
-                                <div className="border-2 border-dashed rounded-lg p-4 text-center text-sm text-gray-500 hover:bg-gray-50 cursor-pointer relative">
-                                    <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setBeautyShot(e.target.files?.[0] || null)} accept="image/*" />
-                                    {beautyShot ? beautyShot.name : "Click to Upload"}
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="text-sm font-medium text-gray-700 mb-1 block">AI Reference (High Contrast)</label>
-                                <div className="border-2 border-dashed rounded-lg p-4 text-center text-sm text-gray-500 hover:bg-gray-50 cursor-pointer relative">
-                                    <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setAiRef(e.target.files?.[0] || null)} accept="image/*" />
-                                    {aiRef ? aiRef.name : "Click to Upload"}
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="text-sm font-medium text-gray-700 mb-1 block">Tags (comma separated)</label>
-                                <input value={tags} onChange={e => setTags(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="Chrome, Blue, Summer" />
-                            </div>
-
-                            <button disabled={uploading} className="w-full bg-black text-white py-3 rounded-xl font-bold hover:opacity-90 flex justify-center items-center gap-2">
-                                {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Submit for Review"}
-                            </button>
-                        </form>
-                    </div>
+        <div className="max-w-7xl mx-auto p-8 flex flex-col lg:flex-row gap-10">
+            <form onSubmit={handleSubmit} className="w-full lg:w-1/3 bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm h-fit">
+                <h2 className="text-2xl font-black mb-6 flex items-center gap-2"><Plus className="text-[#7D2AE8]" /> New Template</h2>
+                <div className="space-y-4">
+                    <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Design Title" className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-purple-100" required />
+                    <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="Tags (Space, Chrome)" className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-purple-100" required />
+                    <input value={beautyUrl} onChange={(e) => setBeautyUrl(e.target.value)} placeholder="Marketplace Image URL" className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-purple-100" required />
+                    <input value={aiRefUrl} onChange={(e) => setAiRefUrl(e.target.value)} placeholder="Gemini Reference URL" className="w-full p-4 bg-gray-50 rounded-2xl outline-none focus:ring-2 ring-purple-100" required />
+                    <button type="submit" disabled={isSubmitting || !appUser?.uid} className="w-full py-5 btn-gradient text-white font-bold rounded-2xl shadow-lg disabled:opacity-50">
+                        {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : "Submit Design"}
+                    </button>
                 </div>
+            </form>
 
-                {/* RIGHT: Drafts & Pending */}
-                <div className="lg:col-span-2 space-y-4">
-                    <h3 className="font-bold text-gray-900 text-lg">My Submissions</h3>
-
-                    {templates.length === 0 && <p className="text-gray-400 text-sm">No submissions yet.</p>}
-
-                    {templates.map(t => (
-                        <div key={t.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex gap-4 items-start">
-                            {/* Thumbnail */}
-                            <img src={t.marketplaceImage} className="w-20 h-20 rounded-lg object-cover bg-gray-100" />
-
-                            {/* Content */}
-                            <div className="flex-1">
-                                <div className="flex justify-between items-start">
-                                    <h4 className="font-bold text-gray-900">{t.title}</h4>
-                                    <StatusBadge status={t.status} />
+            <div className="flex-1">
+                <h2 className="text-2xl font-black italic mb-6">Studio Submissions</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {mySubmissions.map(s => (
+                        <div key={s.id} className="bg-white p-5 rounded-3xl border border-gray-100 flex gap-4 items-center">
+                            <img src={s.marketplaceImage} className="w-20 h-20 rounded-2xl object-cover" />
+                            <div className="flex-1 min-w-0">
+                                <h4 className="font-bold truncate">{s.title}</h4>
+                                <div className="mt-2">
+                                    {s.status === "pending" && <span className="text-[10px] font-bold text-orange-500 uppercase flex items-center gap-1"><Clock className="w-3 h-3" /> Pending</span>}
+                                    {s.status === "approved" && <span className="text-[10px] font-bold text-green-500 uppercase flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Approved</span>}
+                                    {s.status === "rejected" && <span className="text-[10px] font-bold text-red-500 uppercase flex items-center gap-1"><XCircle className="w-3 h-3" /> Rejected</span>}
                                 </div>
-                                <p className="text-xs text-gray-500 mt-1">
-                                    Submitted: {t.createdAt ? new Date(t.createdAt.seconds * 1000).toLocaleDateString() : 'Just now'}
-                                </p>
-
-                                {/* REJECTION FEEDBACK */}
-                                {t.status === 'rejected' && t.adminComment && (
-                                    <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg flex gap-2 items-start">
-                                        <AlertTriangle className="text-red-500 w-4 h-4 mt-0.5 shrink-0" />
-                                        <div>
-                                            <p className="text-xs font-bold text-red-700 uppercase">Admin Feedback:</p>
-                                            <p className="text-sm text-red-800 font-medium">{t.adminComment}</p>
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     ))}
@@ -167,10 +104,4 @@ export default function EditorDashboard() {
             </div>
         </div>
     );
-}
-
-function StatusBadge({ status }: { status: string }) {
-    if (status === "approved") return <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Live</span>;
-    if (status === "rejected") return <span className="bg-red-100 text-red-700 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Rejected</span>;
-    return <span className="bg-yellow-100 text-yellow-700 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1"><Clock className="w-3 h-3" /> Pending</span>;
 }

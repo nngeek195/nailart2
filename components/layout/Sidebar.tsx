@@ -94,7 +94,7 @@ export default function Sidebar() {
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-gray-900 truncate group-hover:text-[#7D2AE8] transition-colors">
-                                {appUser.username}
+                                <a href="/profile">{appUser.username}</a>
                             </p>
                             <p className="text-xs text-gray-500 truncate">View Profile</p>
                         </div>

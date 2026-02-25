@@ -77,12 +77,17 @@ export default function GeneratorModal({ template, children }: Props) {
                             </div>
                         </div>
                         <h3 className="mt-6 text-lg font-semibold text-gray-800">{template.title}</h3>
+                        {/* Find where you map tags and wrap it in this check */}
                         <div className="flex gap-2 mt-2">
-                            {template.tags.map(tag => (
-                                <span key={tag} className="text-[10px] uppercase tracking-widest text-gray-400 bg-gray-200/50 px-2 py-1 rounded-md">
-                                    #{tag}
-                                </span>
-                            ))}
+                            {Array.isArray(template.tags) ? (
+                                template.tags.map((tag: string) => (
+                                    <span key={tag} className="text-[10px] uppercase tracking-widest text-gray-400 bg-gray-200/50 px-2 py-1 rounded-md">
+                                        #{tag}
+                                    </span>
+                                ))
+                            ) : (
+                                <span className="text-[10px] text-gray-400">#NailArt</span>
+                            )}
                         </div>
                     </div>
 
