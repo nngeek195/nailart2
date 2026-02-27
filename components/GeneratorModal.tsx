@@ -1,8 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/providers/AuthProvider";
+import { db } from "@/lib/firebase";
+import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
 import { Dialog, DialogContent, DialogTrigger, DialogTitle } from "@/components/ui/dialog";
-import { Upload, X, Sparkles, RefreshCcw, CheckCircle2, ChevronRight } from "lucide-react";
+import { Upload, X, Sparkles, RefreshCcw, CheckCircle2, Clock, HardDrive, AlertTriangle, Loader2 } from "lucide-react";
 import ImageCompareSlider from "@/components/ImageCompareSlider";
 
 type Props = {
@@ -17,11 +19,15 @@ export default function GeneratorModal({ template, children }: Props) {
     const [preview, setPreview] = useState<string | null>(null);
     const [resultImage, setResultImage] = useState<string | null>(null);
     const [progress, setProgress] = useState(0);
+    const [cooldown, setCooldown] = useState(0);
 
-    // Clean up memory when preview changes
+    // 🕒 Lockout Timer Logic
     useEffect(() => {
-        return () => { if (preview) URL.revokeObjectURL(preview); };
-    }, [preview]);
+        if (cooldown > 0) {
+            const timer = setInterval(() => setCooldown((prev) => prev - 1), 1000);
+            return () => clearInterval(timer);
+        }
+    }, [cooldown]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFile = e.target.files?.[0];
@@ -31,157 +37,208 @@ export default function GeneratorModal({ template, children }: Props) {
         }
     };
 
-    const startGeneration = async () => {
-        if (!file || !appUser) return;
+    // 💎 EFFICIENT IMAGE PROCESSING: Reduces tokens to avoid 429 errors
+    const processImage = (file: File): Promise<string> => new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target?.result as string;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 400; // Small size = Low tokens = Stability
+                const scaleSize = MAX_WIDTH / img.width;
+                canvas.width = MAX_WIDTH;
+                canvas.height = img.height * scaleSize;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/jpeg', 0.5)); // JPEG 0.5 is the token-saving hero
+            };
+        };
+    });
+
+    const startGeneration = async (retryCount = 0) => {
+        if (!file || !appUser || cooldown > 0) return;
+
         setStep("generating");
-        setProgress(0);
+        setProgress(20);
 
-        // Simulation of the dual-progress you wanted (Upload -> Process)
-        const interval = setInterval(() => {
-            setProgress((prev) => (prev < 90 ? prev + 5 : prev));
-        }, 150);
+        // 🛑 TIMEOUT GUARD (Ensures the app doesn't stay stuck)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-        // REAL API CALL LATER: await fetch('/api/generate', ...)
-        setTimeout(() => {
-            clearInterval(interval);
-            setProgress(100);
-            setResultImage("https://picsum.photos/seed/nail_result/800/1000"); // Mock Result
-            setStep("result");
-        }, 3000);
+        try {
+            const handBase64 = await processImage(file);
+
+            const response = await fetch("/api/generate", {
+                method: "POST",
+                signal: controller.signal,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ handImage: handBase64, templateRef: template.image }),
+            });
+
+            clearTimeout(timeoutId);
+
+            // 🛡️ QUOTA RECOVERY: Auto-wait 17s if 429 occurs
+            if (response.status === 429 && retryCount < 1) {
+                console.warn("Quota rift detected. Manifesting patience...");
+                setProgress(429);
+                await new Promise(res => setTimeout(res, 17000));
+                return startGeneration(retryCount + 1);
+            }
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.details || "AI Core unstable");
+            }
+
+            const data = await response.json();
+            if (data.output) {
+                setResultImage(data.output);
+
+                // 📁 SAVE TO FIREBASE (Immediate Sync)
+                await addDoc(collection(db, "generations"), {
+                    userId: appUser.uid,
+                    templateId: template.id,
+                    templateTitle: template.title,
+                    resultImage: data.output,
+                    createdAt: serverTimestamp(),
+                    tags: template.tags || []
+                });
+
+                // 📊 INCREMENT USER STATS
+                await updateDoc(doc(db, "users", appUser.uid), {
+                    generationCount: increment(1)
+                });
+
+                // ☁️ BACKGROUND DRIVE SYNC
+                syncToGDrive(data.output, template.title);
+
+                setStep("result");
+                setCooldown(15); // Balanced cooldown for stability
+            }
+            // Inside GeneratorModal.tsx catch block:
+        } catch (err: any) {
+            setStep("upload");
+
+            // Check if it's a real timeout or an API error
+            let displayMessage = "";
+            if (err.name === 'AbortError') {
+                displayMessage = "The AI Core is taking too long. Check your server logs for a 404 or Quota error.";
+            } else {
+                // 🛡️ SHOW THE ACTUAL ERROR FROM THE API
+                displayMessage = `Rift Error: ${err.message}`;
+            }
+
+            alert(displayMessage);
+        }
+    };
+
+    const syncToGDrive = async (base64: string, title: string) => {
+        try {
+            await fetch('/api/drive/upload', {
+                method: 'POST',
+                body: JSON.stringify({ image: base64, name: title })
+            });
+        } catch (e) { console.warn("Drive sync deferred."); }
     };
 
     return (
         <Dialog onOpenChange={(open) => !open && setStep("upload")}>
             <DialogTrigger asChild>{children}</DialogTrigger>
 
-            <DialogContent className="max-w-6xl h-[90vh] p-0 overflow-hidden flex flex-col bg-white border-none rounded-3xl">
-                {/* Visual Header (Always Visible) */}
-                <div className="px-6 py-4 flex justify-between items-center border-b border-gray-50">
-                    <DialogTitle className="text-xl font-bold bg-gradient-to-r from-[#7D2AE8] to-[#FF4081] bg-clip-text text-transparent">
+            <DialogContent className="max-w-6xl h-[90vh] p-0 overflow-hidden flex flex-col bg-white border-none rounded-[3.5rem] shadow-2xl">
+                {/* --- HEADER --- */}
+                <div className="px-10 py-6 flex justify-between items-center border-b border-slate-50">
+                    <DialogTitle className="text-2xl font-black bg-gradient-to-r from-purple-600 to-pink-500 bg-clip-text text-transparent italic tracking-tighter">
                         NailVirtuoso Studio
                     </DialogTitle>
+                    <div className="flex items-center gap-3">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Stable Core 2.0</span>
+                    </div>
                 </div>
 
                 <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
 
-                    {/* LEFT SIDE: Template View */}
-                    <div className="w-full md:w-1/2 bg-gray-50 p-8 flex flex-col items-center justify-center border-r border-gray-100">
+                    {/* LEFT: REFERENCE VIEW */}
+                    <div className="w-full md:w-1/2 bg-slate-50/50 p-12 flex flex-col items-center justify-center border-r border-slate-100">
                         <div className="relative group w-full max-w-sm">
-                            <img
-                                src={template.image}
-                                alt={template.title}
-                                className="rounded-2xl shadow-2xl w-full object-cover aspect-[3/4] transition-transform duration-500 group-hover:scale-[1.02]"
-                            />
-                            <div className="absolute top-4 left-4 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-xs font-bold text-[#7D2AE8] shadow-sm">
-                                SELECTED TEMPLATE
-                            </div>
+                            <img src={template.image} className="rounded-[2.5rem] shadow-2xl w-full object-cover aspect-[3/4] border-4 border-white transition-transform group-hover:scale-105 duration-700" />
                         </div>
-                        <h3 className="mt-6 text-lg font-semibold text-gray-800">{template.title}</h3>
-                        {/* Find where you map tags and wrap it in this check */}
-                        <div className="flex gap-2 mt-2">
-                            {Array.isArray(template.tags) ? (
-                                template.tags.map((tag: string) => (
-                                    <span key={tag} className="text-[10px] uppercase tracking-widest text-gray-400 bg-gray-200/50 px-2 py-1 rounded-md">
-                                        #{tag}
-                                    </span>
-                                ))
-                            ) : (
-                                <span className="text-[10px] text-gray-400">#NailArt</span>
-                            )}
-                        </div>
+                        <h3 className="mt-8 text-2xl font-black text-slate-900 italic tracking-tight">{template.title}</h3>
                     </div>
 
-                    {/* RIGHT SIDE: Action Area */}
-                    <div className="w-full md:w-1/2 p-10 flex flex-col bg-white">
+                    {/* RIGHT: ACTION AREA */}
+                    <div className="w-full md:w-1/2 p-12 flex flex-col bg-white justify-center">
                         {step === "upload" && (
-                            <div className="h-full flex flex-col justify-center animate-in fade-in slide-in-from-right-4 duration-500">
-                                <h3 className="text-3xl font-extrabold text-gray-900 mb-2">Try it on.</h3>
-                                <p className="text-gray-500 mb-8 italic">Upload a clear photo of your hand for best results.</p>
+                            <div className="animate-in fade-in slide-in-from-right-8 duration-700">
+                                <h3 className="text-4xl font-black text-slate-900 tracking-tighter mb-4">Manifest style.</h3>
+                                <p className="text-slate-400 mb-12 font-medium">Upload your source hand photo to begin the AI application.</p>
 
-                                <div className="relative border-2 border-dashed border-gray-200 rounded-3xl aspect-square max-h-80 flex flex-col items-center justify-center overflow-hidden hover:border-[#7D2AE8] hover:bg-purple-50/20 transition-all cursor-pointer group mb-8">
+                                <div className="relative border-2 border-dashed border-slate-100 rounded-[3rem] aspect-square max-h-80 flex flex-col items-center justify-center overflow-hidden hover:border-purple-200 hover:bg-purple-50/20 transition-all cursor-pointer group mb-10">
                                     {preview ? (
-                                        <>
-                                            <img src={preview} className="absolute inset-0 w-full h-full object-cover" />
-                                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                                                <RefreshCcw className="text-white w-8 h-8" />
-                                            </div>
-                                        </>
+                                        <img src={preview} className="absolute inset-0 w-full h-full object-cover" />
                                     ) : (
-                                        <div className="text-center p-6">
-                                            <div className="w-16 h-16 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition">
-                                                <Upload className="w-8 h-8 text-[#7D2AE8]" />
+                                        <div className="text-center p-8">
+                                            <div className="w-20 h-20 bg-purple-50 rounded-full flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition duration-500">
+                                                <Upload className="w-8 h-8 text-purple-600" />
                                             </div>
-                                            <p className="font-bold text-gray-700">Drop your hand photo here</p>
-                                            <p className="text-sm text-gray-400 mt-1">PNG, JPG up to 10MB</p>
+                                            <p className="font-black text-slate-900 uppercase text-[10px] tracking-[0.2em]">Select Source Image</p>
                                         </div>
                                     )}
                                     <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleFileChange} accept="image/*" />
                                 </div>
 
-                                <button
-                                    onClick={startGeneration}
-                                    disabled={!file}
-                                    className="w-full h-16 btn-gradient rounded-2xl font-bold text-white shadow-lg shadow-purple-200 flex items-center justify-center gap-3 disabled:grayscale disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                                >
-                                    <Sparkles className="w-6 h-6" /> Generate My Nail Art
+                                <button onClick={() => startGeneration()} disabled={!file || cooldown > 0} className="w-full h-20 bg-slate-900 rounded-[2rem] font-black text-white shadow-2xl flex items-center justify-center gap-4 disabled:opacity-30 active:scale-95 transition-all">
+                                    {cooldown > 0 ? <><Clock className="w-5 h-5 text-purple-400" /> Cooldown: {cooldown}s</> : <><Sparkles className="w-6 h-6 text-purple-400" /> Manifest Nails</>}
                                 </button>
                             </div>
                         )}
 
                         {step === "generating" && (
-                            <div className="h-full flex flex-col items-center justify-center text-center animate-in zoom-in-95 duration-300">
-                                <div className="relative w-32 h-32 mb-8">
-                                    <div className="absolute inset-0 border-4 border-gray-100 rounded-full" />
-                                    <div
-                                        className="absolute inset-0 border-4 border-t-[#7D2AE8] border-r-[#FF4081] rounded-full animate-spin"
-                                        style={{ transition: 'all 0.3s ease' }}
-                                    />
-                                    <div className="absolute inset-0 flex items-center justify-center text-xl font-black text-gray-700">
-                                        {progress}%
+                            <div className="flex flex-col items-center text-center px-10 animate-in fade-in duration-500">
+                                {progress === 429 ? (
+                                    <div className="space-y-6">
+                                        <div className="w-24 h-24 bg-orange-50 rounded-[2rem] flex items-center justify-center mx-auto shadow-sm border border-orange-100">
+                                            <AlertTriangle className="text-orange-500 w-10 h-10 animate-pulse" />
+                                        </div>
+                                        <h3 className="text-2xl font-black text-slate-900 italic tracking-tighter">Crowded Multiverse</h3>
+                                        <p className="text-slate-400 text-sm font-medium leading-relaxed">High traffic detected. Waiting 17 seconds for a clean rift in the quota pool...</p>
+                                        <Loader2 className="w-6 h-6 animate-spin text-orange-400 mx-auto mt-4" />
                                     </div>
-                                </div>
-                                <h3 className="text-2xl font-bold text-gray-900 mb-2">Creating the Magic</h3>
-                                <p className="text-gray-500 animate-pulse">Our AI is meticulously painting your nails...</p>
+                                ) : (
+                                    <>
+                                        <div className="relative w-44 h-44 mb-10">
+                                            <div className="absolute inset-0 border-8 border-slate-50 rounded-full" />
+                                            <div className="absolute inset-0 border-8 border-t-purple-600 border-r-pink-500 rounded-full animate-spin" />
+                                            <div className="absolute inset-0 flex items-center justify-center text-3xl font-black text-slate-900 tracking-tighter italic">{progress}%</div>
+                                        </div>
+                                        <h3 className="text-3xl font-black text-slate-900 italic tracking-tighter">Gemini 2.0 Processing</h3>
+                                        <p className="text-slate-400 font-bold uppercase text-[9px] tracking-[0.3em] mt-4 animate-pulse italic">Applying Neural Overlays</p>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>
 
-                    {/* FULL OVERLAY FOR RESULT (To allow the slider to use full space) */}
+                    {/* FULL OVERLAY RESULT */}
                     {step === "result" && (
-                        <div className="absolute inset-0 bg-white z-50 flex flex-col animate-in fade-in zoom-in-95 duration-500">
-                            <div className="flex-1 relative bg-black">
-                                <ImageCompareSlider
-                                    before={preview || template.image}
-                                    after={resultImage || ""}
-                                />
-                                <div className="absolute top-6 left-6 bg-white/20 backdrop-blur-md border border-white/30 text-white px-4 py-2 rounded-full flex items-center gap-2 text-sm font-medium">
-                                    <CheckCircle2 className="w-4 h-4 text-green-400" /> Comparison View
+                        <div className="absolute inset-0 bg-white z-50 flex flex-col animate-in fade-in zoom-in-95 duration-700">
+                            <div className="flex-1 relative bg-slate-900">
+                                <ImageCompareSlider before={preview || ""} after={resultImage || ""} />
+                                <div className="absolute top-8 left-8 bg-black/40 backdrop-blur-2xl border border-white/20 text-white px-6 py-2.5 rounded-full flex items-center gap-3 text-[10px] font-black uppercase tracking-widest shadow-2xl">
+                                    <CheckCircle2 className="w-4 h-4 text-green-400" /> Manifestation Success
                                 </div>
                             </div>
 
-                            {/* Canva-style Suggestions Footer */}
-                            <div className="h-56 bg-white border-t border-gray-100 p-6 flex flex-col">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h4 className="font-bold text-gray-800">You might also like</h4>
-                                    <button className="text-xs font-bold text-[#7D2AE8] flex items-center hover:underline">
-                                        VIEW ALL <ChevronRight className="w-3 h-3" />
-                                    </button>
+                            <div className="h-72 bg-white border-t border-slate-50 p-12 flex flex-col items-center justify-center text-center">
+                                <div className="flex items-center gap-2 text-purple-600 mb-2">
+                                    <HardDrive className="w-4 h-4" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest">Saved to Profile & Cloud</span>
                                 </div>
-                                <div className="flex-1 flex gap-4 overflow-x-auto no-scrollbar pb-2">
-                                    {[1, 2, 3, 4, 5].map((i) => (
-                                        <div key={i} className="min-w-[120px] h-full bg-gray-100 rounded-xl overflow-hidden cursor-pointer hover:ring-2 ring-[#7D2AE8] transition-all">
-                                            <img src={`https://picsum.photos/seed/${i + 10}/200/200`} className="w-full h-full object-cover" />
-                                        </div>
-                                    ))}
-                                </div>
-                                <div className="mt-4 flex gap-4">
-                                    <button onClick={() => setStep("upload")} className="flex-1 h-12 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition">
-                                        Try New Photo
-                                    </button>
-                                    <button className="flex-[2] h-12 btn-gradient rounded-xl font-bold text-white shadow-lg">
-                                        Save to My Profile
-                                    </button>
-                                </div>
+                                <h4 className="text-4xl font-black italic mb-10 tracking-tighter">Your style is ready.</h4>
+                                <button onClick={() => setStep("upload")} className="w-full max-w-md h-16 bg-slate-900 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest text-white shadow-2xl hover:bg-purple-600 transition-colors">Close Studio</button>
                             </div>
                         </div>
                     )}

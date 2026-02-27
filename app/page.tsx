@@ -90,7 +90,7 @@ function HomeContent() {
 
       {/* 3. FILTER CHIPS */}
       <div className="flex gap-3 mb-10 overflow-x-auto no-scrollbar pb-2">
-        {["#All", "#Space", "#Dark", "#Chrome", "#Nude"].map((tag) => (
+        {["#All"].map((tag) => (
           <button
             key={tag}
             onClick={() => setActiveFilter(tag)}

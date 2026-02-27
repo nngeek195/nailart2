@@ -1,61 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
-import { doc, getDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { uploadUserImage } from "@/services/storage";
-import { generateNailArt } from "@/services/gemini";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { NextResponse } from "next/server";
 
-export async function POST(req: NextRequest) {
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+export async function POST(req: Request) {
     try {
-        const formData = await req.formData();
-        const userId = formData.get("userId") as string;
-        const templateId = formData.get("templateId") as string;
-        const handImageFile = formData.get("handImage") as File;
+        const { handImage, templateRef } = await req.json();
 
-        if (!userId || !templateId || !handImageFile) {
-            return NextResponse.json({ error: "Missing fields" }, { status: 400 });
-        }
+        // 🎯 Target the 2026 stable identifier
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-        // 1. Get User Info (for Token/Quota)
-        const userDoc = await getDoc(doc(db, "users", userId));
-        if (!userDoc.exists()) return NextResponse.json({ error: "User not found" }, { status: 404 });
-        const userData = userDoc.data();
+        const templateResp = await fetch(templateRef);
+        if (!templateResp.ok) throw new Error(`Template Fetch Failed: ${templateResp.statusText}`);
 
-        // 2. Get Template Info (Cloudinary URL)
-        const templateDoc = await getDoc(doc(db, "templates", templateId));
-        if (!templateDoc.exists()) return NextResponse.json({ error: "Template not found" }, { status: 404 });
-        const templateData = templateDoc.data();
-        const templateRefUrl = templateData.referenceImage; // The high-contrast AI ref
+        const templateBuf = await templateResp.arrayBuffer();
+        const templateBase64 = Buffer.from(templateBuf).toString('base64');
 
-        // 3. Upload User Hand to Google Cloud Storage (The Private Vault)
-        const handImageUrl = await uploadUserImage(handImageFile, userId, "hand");
+        const prompt = "Overlay design to nails. Return ONLY base64.";
 
-        // 4. Call Gemini API (The Creative Engine)
-        // We pass the user's token if implementing strict user-pays, 
-        // otherwise we use server key but track usage.
-        const base64Result = await generateNailArt(
-            userData.refreshToken || "server-key",
-            templateRefUrl,
-            handImageUrl
-        );
+        const result = await model.generateContent([
+            prompt,
+            { inlineData: { data: handImage.split(',')[1], mimeType: "image/jpeg" } },
+            { inlineData: { data: templateBase64, mimeType: "image/jpeg" } }
+        ]);
 
-        // 5. Convert Base64 Result to File and Save to GCS
-        const resultBlob = await (await fetch(base64Result)).blob();
-        const resultFile = new File([resultBlob], "result.png", { type: "image/png" });
-        const finalResultUrl = await uploadUserImage(resultFile, userId, "result");
+        const response = await result.response;
+        const text = response.text();
+        const base64Clean = text.replace(/[^A-Za-z0-9+/=]/g, "");
 
-        // 6. Save Record to Firestore (Generations Collection)
-        await addDoc(collection(db, "generations"), {
-            userId,
-            templateId,
-            handImageUrl,
-            generatedImageUrl: finalResultUrl,
-            createdAt: serverTimestamp(),
-        });
+        return NextResponse.json({ output: `data:image/png;base64,${base64Clean}` });
 
-        return NextResponse.json({ success: true, imageUrl: finalResultUrl });
+    } catch (error: any) {
+        // 🧪 DETAILED ERROR PROPAGATION
+        console.error("RIFT DIAGNOSTIC:", error);
 
-    } catch (error) {
-        console.error("Generation Error:", error);
-        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+        // Extract the raw message from Google or the System
+        const errorMessage = error.message || "Unknown Rift";
+        const statusCode = error.status || 500;
+
+        return NextResponse.json({
+            error: "Manifestation Interrupted",
+            details: errorMessage,
+            code: statusCode
+        }, { status: statusCode });
     }
 }

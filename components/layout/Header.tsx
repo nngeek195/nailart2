@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Search, Bell } from "lucide-react";
+import { Search } from "lucide-react";
 import { useAuth } from "@/providers/AuthProvider";
+import NotificationBell from "@/components/NotificationBell"; // 👈 Import our new component
 
 export default function Header() {
     const { appUser } = useAuth();
@@ -18,27 +19,36 @@ export default function Header() {
     };
 
     return (
-        <header className="h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 flex items-center justify-between px-8 fixed top-0 right-0 left-[280px] z-40 transition-all">
+        <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-100 flex items-center justify-between px-8 fixed top-0 right-0 left-[280px] z-40 transition-all">
 
             {/* Unified Search Bar */}
             <div className="relative w-96 group">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5 group-focus-within:text-[#7D2AE8] transition-colors" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5 group-focus-within:text-[#7D2AE8] transition-colors" />
                 <input
                     type="text"
                     onChange={handleSearch}
                     placeholder="Search patterns, colors, or styles..."
-                    className="w-full bg-gray-100 text-sm rounded-full pl-12 pr-4 py-2.5 outline-none focus:ring-2 focus:ring-[#7D2AE8]/20 focus:bg-white transition-all placeholder:text-gray-500 shadow-inner border border-transparent focus:border-[#7D2AE8]"
+                    className="w-full bg-slate-50 text-sm rounded-2xl pl-12 pr-4 py-3 outline-none focus:ring-4 focus:ring-[#7D2AE8]/5 focus:bg-white transition-all placeholder:text-slate-400 border border-transparent focus:border-[#7D2AE8]/20"
                 />
             </div>
 
             {/* Right Actions */}
-            <div className="flex items-center gap-4">
-                <button className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-500 transition relative">
-                    <Bell className="w-5 h-5" />
-                    {appUser && <span className="absolute top-2 right-2 w-2 h-2 bg-[#FF4081] rounded-full border border-white"></span>}
-                </button>
+            <div className="flex items-center gap-6">
+                {/* 🔔 Our new animated notification system */}
+                <NotificationBell />
+
                 {appUser && (
-                    <img src={appUser.photoURL} className="w-8 h-8 rounded-full border border-gray-200" alt="profile" />
+                    <div className="flex items-center gap-3 pl-4 border-l border-slate-100">
+                        <div className="text-right hidden md:block">
+                            <p className="text-[10px] font-black text-slate-900 uppercase tracking-tighter">{appUser.username}</p>
+                            <p className="text-[8px] font-bold text-purple-600 uppercase tracking-widest leading-none">Online</p>
+                        </div>
+                        <img
+                            src={appUser.photoURL}
+                            className="w-9 h-9 rounded-xl border-2 border-white shadow-sm object-cover"
+                            alt="profile"
+                        />
+                    </div>
                 )}
             </div>
         </header>
