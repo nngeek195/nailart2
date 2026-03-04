@@ -4,11 +4,15 @@ import { useAuth } from "@/providers/AuthProvider";
 import { db } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
 import { Dialog, DialogContent, DialogTrigger, DialogTitle } from "@/components/ui/dialog";
-import { Upload, X, Sparkles, RefreshCcw, CheckCircle2, Clock, HardDrive, AlertTriangle, Loader2 } from "lucide-react";
+// Corrected RefreshCw and added ZapOff for the quota lockout UI
+import { 
+    Upload, X, Sparkles, RefreshCw, CheckCircle2, 
+    Clock, HardDrive, AlertTriangle, Loader2, ZapOff 
+} from "lucide-react";
 import ImageCompareSlider from "@/components/ImageCompareSlider";
 
 type Props = {
-    template: { id: string; title: string; image: string; tags: string[] };
+    template: { id: string; title: string; image: string; tags: string[]; metaPrompt?: string };
     children: React.ReactNode;
 };
 
@@ -20,14 +24,29 @@ export default function GeneratorModal({ template, children }: Props) {
     const [resultImage, setResultImage] = useState<string | null>(null);
     const [progress, setProgress] = useState(0);
     const [cooldown, setCooldown] = useState(0);
+    
+    // --- 2026 AI STATES ---
+    const [generating, setGenerating] = useState(false);
+    const [isWaiting, setIsWaiting] = useState(false);
+    const [countdown, setCountdown] = useState(0);
 
-    // 🕒 Lockout Timer Logic
+    // 🕒 Lockout & Cooldown Logic
     useEffect(() => {
         if (cooldown > 0) {
             const timer = setInterval(() => setCooldown((prev) => prev - 1), 1000);
             return () => clearInterval(timer);
         }
     }, [cooldown]);
+
+    useEffect(() => {
+        if (countdown > 0) {
+            const timer = setInterval(() => setCountdown((prev) => prev - 1), 1000);
+            return () => {
+                clearInterval(timer);
+                if (countdown <= 1) setIsWaiting(false);
+            };
+        }
+    }, [countdown]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const selectedFile = e.target.files?.[0];
@@ -37,7 +56,7 @@ export default function GeneratorModal({ template, children }: Props) {
         }
     };
 
-    // 💎 EFFICIENT IMAGE PROCESSING: Reduces tokens to avoid 429 errors
+    // 💎 EFFICIENT IMAGE PROCESSING (Optimized for Hugging Face)
     const processImage = (file: File): Promise<string> => new Promise((resolve) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
@@ -46,105 +65,97 @@ export default function GeneratorModal({ template, children }: Props) {
             img.src = event.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 400; // Small size = Low tokens = Stability
+                const MAX_WIDTH = 512; // Flux works best with 512 or 1024
                 const scaleSize = MAX_WIDTH / img.width;
                 canvas.width = MAX_WIDTH;
                 canvas.height = img.height * scaleSize;
                 const ctx = canvas.getContext('2d');
                 ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL('image/jpeg', 0.5)); // JPEG 0.5 is the token-saving hero
+                resolve(canvas.toDataURL('image/jpeg', 0.7)); 
             };
         };
     });
 
     const startGeneration = async (retryCount = 0) => {
-        if (!file || !appUser || cooldown > 0) return;
+        if (!file || !appUser || isWaiting || generating) return;
 
         setStep("generating");
-        setProgress(20);
+        setGenerating(true);
+        setProgress(10);
 
-        // 🛑 TIMEOUT GUARD (Ensures the app doesn't stay stuck)
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
 
         try {
             const handBase64 = await processImage(file);
+            setProgress(30);
 
             const response = await fetch("/api/generate", {
                 method: "POST",
                 signal: controller.signal,
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ handImage: handBase64, templateRef: template.image }),
+                body: JSON.stringify({ 
+                    handImage: handBase64, 
+                    metaPrompt: template.metaPrompt || "Classic high-gloss manicure"
+                }),
             });
 
             clearTimeout(timeoutId);
 
-            // 🛡️ QUOTA RECOVERY: Auto-wait 17s if 429 occurs
-            if (response.status === 429 && retryCount < 1) {
-                console.warn("Quota rift detected. Manifesting patience...");
-                setProgress(429);
-                await new Promise(res => setTimeout(res, 17000));
-                return startGeneration(retryCount + 1);
+            // 🚨 HUGGING FACE: Model Warming Up (503)
+            if (response.status === 503) {
+                setIsWaiting(true);
+                setCountdown(30);
+                throw new Error("Flux engine is waking up on Hugging Face. Please wait 30s.");
+            }
+
+            // 🚨 HUGGING FACE: Rate Limit (429)
+            if (response.status === 429) {
+                setIsWaiting(true);
+                setCountdown(60);
+                throw new Error("Rift Overloaded: Hugging Face free tier limit reached. Wait 60s.");
             }
 
             if (!response.ok) {
                 const errData = await response.json();
-                throw new Error(errData.details || "AI Core unstable");
+                throw new Error(errData.error || "The stable rift encountered an internal error.");
             }
 
             const data = await response.json();
+            setProgress(80);
+
             if (data.output) {
                 setResultImage(data.output);
 
-                // 📁 SAVE TO FIREBASE (Immediate Sync)
+                // 📁 SAVE TO FIREBASE
                 await addDoc(collection(db, "generations"), {
                     userId: appUser.uid,
                     templateId: template.id,
                     templateTitle: template.title,
                     resultImage: data.output,
                     createdAt: serverTimestamp(),
-                    tags: template.tags || []
                 });
 
-                // 📊 INCREMENT USER STATS
+                // 📊 INCREMENT STATS
                 await updateDoc(doc(db, "users", appUser.uid), {
                     generationCount: increment(1)
                 });
 
-                // ☁️ BACKGROUND DRIVE SYNC
-                syncToGDrive(data.output, template.title);
-
-                setStep("result");
-                setCooldown(15); // Balanced cooldown for stability
+                setProgress(100);
+                setTimeout(() => setStep("result"), 500);
             }
-            // Inside GeneratorModal.tsx catch block:
+
         } catch (err: any) {
+            console.error("GENERATION RIFT:", err.message);
             setStep("upload");
-
-            // Check if it's a real timeout or an API error
-            let displayMessage = "";
-            if (err.name === 'AbortError') {
-                displayMessage = "The AI Core is taking too long. Check your server logs for a 404 or Quota error.";
-            } else {
-                // 🛡️ SHOW THE ACTUAL ERROR FROM THE API
-                displayMessage = `Rift Error: ${err.message}`;
-            }
-
-            alert(displayMessage);
+            alert(err.name === 'AbortError' ? "The AI is taking too long. Try a smaller image." : err.message);
+        } finally {
+            setGenerating(false);
         }
     };
 
-    const syncToGDrive = async (base64: string, title: string) => {
-        try {
-            await fetch('/api/drive/upload', {
-                method: 'POST',
-                body: JSON.stringify({ image: base64, name: title })
-            });
-        } catch (e) { console.warn("Drive sync deferred."); }
-    };
-
     return (
-        <Dialog onOpenChange={(open) => !open && setStep("upload")}>
+        <Dialog onOpenChange={(open) => { if(!open) { setStep("upload"); setProgress(0); setFile(null); setPreview(null); } }}>
             <DialogTrigger asChild>{children}</DialogTrigger>
 
             <DialogContent className="max-w-6xl h-[90vh] p-0 overflow-hidden flex flex-col bg-white border-none rounded-[3.5rem] shadow-2xl">
@@ -154,8 +165,10 @@ export default function GeneratorModal({ template, children }: Props) {
                         NailVirtuoso Studio
                     </DialogTitle>
                     <div className="flex items-center gap-3">
-                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Stable Core 2.0</span>
+                        <div className={`w-2 h-2 rounded-full animate-pulse ${isWaiting ? 'bg-orange-500' : 'bg-green-500'}`} />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            {isWaiting ? 'Rift Recharging' : 'Flux Core 1.0 Active'}
+                        </span>
                     </div>
                 </div>
 
@@ -190,34 +203,31 @@ export default function GeneratorModal({ template, children }: Props) {
                                     <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleFileChange} accept="image/*" />
                                 </div>
 
-                                <button onClick={() => startGeneration()} disabled={!file || cooldown > 0} className="w-full h-20 bg-slate-900 rounded-[2rem] font-black text-white shadow-2xl flex items-center justify-center gap-4 disabled:opacity-30 active:scale-95 transition-all">
-                                    {cooldown > 0 ? <><Clock className="w-5 h-5 text-purple-400" /> Cooldown: {cooldown}s</> : <><Sparkles className="w-6 h-6 text-purple-400" /> Manifest Nails</>}
+                                <button 
+                                    onClick={() => startGeneration()} 
+                                    disabled={!file || cooldown > 0 || isWaiting} 
+                                    className={`w-full h-20 rounded-[2rem] font-black text-white shadow-2xl flex items-center justify-center gap-4 active:scale-95 transition-all ${isWaiting ? 'bg-orange-500' : 'bg-slate-900'}`}
+                                >
+                                    {isWaiting ? (
+                                        <><ZapOff className="w-5 h-5" /> Recharging ({countdown}s)</>
+                                    ) : cooldown > 0 ? (
+                                        <><Clock className="w-5 h-5 text-purple-400" /> Wait {cooldown}s</>
+                                    ) : (
+                                        <><Sparkles className="w-6 h-6 text-purple-400" /> Manifest Nails</>
+                                    )}
                                 </button>
                             </div>
                         )}
 
                         {step === "generating" && (
                             <div className="flex flex-col items-center text-center px-10 animate-in fade-in duration-500">
-                                {progress === 429 ? (
-                                    <div className="space-y-6">
-                                        <div className="w-24 h-24 bg-orange-50 rounded-[2rem] flex items-center justify-center mx-auto shadow-sm border border-orange-100">
-                                            <AlertTriangle className="text-orange-500 w-10 h-10 animate-pulse" />
-                                        </div>
-                                        <h3 className="text-2xl font-black text-slate-900 italic tracking-tighter">Crowded Multiverse</h3>
-                                        <p className="text-slate-400 text-sm font-medium leading-relaxed">High traffic detected. Waiting 17 seconds for a clean rift in the quota pool...</p>
-                                        <Loader2 className="w-6 h-6 animate-spin text-orange-400 mx-auto mt-4" />
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="relative w-44 h-44 mb-10">
-                                            <div className="absolute inset-0 border-8 border-slate-50 rounded-full" />
-                                            <div className="absolute inset-0 border-8 border-t-purple-600 border-r-pink-500 rounded-full animate-spin" />
-                                            <div className="absolute inset-0 flex items-center justify-center text-3xl font-black text-slate-900 tracking-tighter italic">{progress}%</div>
-                                        </div>
-                                        <h3 className="text-3xl font-black text-slate-900 italic tracking-tighter">Gemini 2.0 Processing</h3>
-                                        <p className="text-slate-400 font-bold uppercase text-[9px] tracking-[0.3em] mt-4 animate-pulse italic">Applying Neural Overlays</p>
-                                    </>
-                                )}
+                                <div className="relative w-44 h-44 mb-10">
+                                    <div className="absolute inset-0 border-8 border-slate-50 rounded-full" />
+                                    <div className="absolute inset-0 border-8 border-t-purple-600 border-r-pink-500 rounded-full animate-spin" />
+                                    <div className="absolute inset-0 flex items-center justify-center text-3xl font-black text-slate-900 tracking-tighter italic">{progress}%</div>
+                                </div>
+                                <h3 className="text-3xl font-black text-slate-900 italic tracking-tighter">Flux.1 Schnell</h3>
+                                <p className="text-slate-400 font-bold uppercase text-[9px] tracking-[0.3em] mt-4 animate-pulse italic">Manifesting Digital Lacquer</p>
                             </div>
                         )}
                     </div>
@@ -235,7 +245,7 @@ export default function GeneratorModal({ template, children }: Props) {
                             <div className="h-72 bg-white border-t border-slate-50 p-12 flex flex-col items-center justify-center text-center">
                                 <div className="flex items-center gap-2 text-purple-600 mb-2">
                                     <HardDrive className="w-4 h-4" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest">Saved to Profile & Cloud</span>
+                                    <span className="text-[10px] font-black uppercase tracking-widest">Saved to Profile</span>
                                 </div>
                                 <h4 className="text-4xl font-black italic mb-10 tracking-tighter">Your style is ready.</h4>
                                 <button onClick={() => setStep("upload")} className="w-full max-w-md h-16 bg-slate-900 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest text-white shadow-2xl hover:bg-purple-600 transition-colors">Close Studio</button>

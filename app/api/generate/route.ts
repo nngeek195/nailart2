@@ -1,47 +1,43 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: Request) {
     try {
-        const { handImage, templateRef } = await req.json();
+        const { handImage, metaPrompt } = await req.json();
 
-        // 🎯 Target the 2026 stable identifier
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        // 🎯 THE 2026 PRODUCTION URL (Crucial: Added /models/)
+        const MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0";
+        const ROUTER_URL = `https://router.huggingface.co/hf-inference/models/${MODEL_ID}`;
 
-        const templateResp = await fetch(templateRef);
-        if (!templateResp.ok) throw new Error(`Template Fetch Failed: ${templateResp.statusText}`);
+        const response = await fetch(ROUTER_URL, {
+            headers: {
+                Authorization: `Bearer ${process.env.HF_TOKEN}`,
+                "Content-Type": "application/json",
+            },
+            method: "POST",
+            body: JSON.stringify({
+                // Ensure inputs and prompt are direct siblings
+                inputs: handImage.includes('base64,') ? handImage.split(',')[1] : handImage,
+                prompt: `Hyper-realistic fingernails, nail art: ${metaPrompt}, 8k photo`,
+                parameters: {
+                    negative_prompt: "deformed fingers, extra limbs, blurry",
+                    strength: 0.35,
+                    guidance_scale: 7.5,
+                },
+            }),
+        });
 
-        const templateBuf = await templateResp.arrayBuffer();
-        const templateBase64 = Buffer.from(templateBuf).toString('base64');
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Router Rift (${response.status}): ${errorText}`);
+        }
 
-        const prompt = "Overlay design to nails. Return ONLY base64.";
+        const buffer = await response.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
 
-        const result = await model.generateContent([
-            prompt,
-            { inlineData: { data: handImage.split(',')[1], mimeType: "image/jpeg" } },
-            { inlineData: { data: templateBase64, mimeType: "image/jpeg" } }
-        ]);
-
-        const response = await result.response;
-        const text = response.text();
-        const base64Clean = text.replace(/[^A-Za-z0-9+/=]/g, "");
-
-        return NextResponse.json({ output: `data:image/png;base64,${base64Clean}` });
+        return NextResponse.json({ output: `data:image/png;base64,${base64}` });
 
     } catch (error: any) {
-        // 🧪 DETAILED ERROR PROPAGATION
-        console.error("RIFT DIAGNOSTIC:", error);
-
-        // Extract the raw message from Google or the System
-        const errorMessage = error.message || "Unknown Rift";
-        const statusCode = error.status || 500;
-
-        return NextResponse.json({
-            error: "Manifestation Interrupted",
-            details: errorMessage,
-            code: statusCode
-        }, { status: statusCode });
+        console.error("ROUTER RIFT:", error.message);
+        return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }

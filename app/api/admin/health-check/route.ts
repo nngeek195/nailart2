@@ -2,28 +2,43 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 
 export async function GET() {
+    const results = {
+        gemini: { status: "checking", message: "" },
+        huggingface: { status: "checking", message: "" },
+    };
+
+    // 1. Check Gemini 3.1
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) return NextResponse.json({ error: "API Key missing" }, { status: 500 });
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-
-        // 🛡️ THE FIX: Using 'gemini-2.0-flash' or 'gemini-2.5-flash'
-        // 🎯 UPDATE THIS LINE:
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
-        // Non-generative check to verify the "Rift" is open
-        await model.countTokens("ping");
-
-        return NextResponse.json({ status: "active" });
-    } catch (error: any) {
-        console.error("Health Check Failure:", error.message);
-
-        if (error.message.includes("404")) {
-            return NextResponse.json({
-                error: "Model path not found. Ensure SDK is updated to version 0.2.x+."
-            }, { status: 404 });
-        }
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+        const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-preview" });
+        // Minimal call to verify key and model status
+        await model.generateContent("ping"); 
+        results.gemini = { status: "online", message: "Gemini 3.1 is stable." };
+    } catch (e: any) {
+        results.gemini = { status: "offline", message: e.message };
     }
+
+    // 2. Check Hugging Face (Manual Fetch for Type Safety)
+    try {
+        const hfResponse = await fetch(
+            "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+            {
+                headers: { Authorization: `Bearer ${process.env.HF_TOKEN}` },
+                method: "GET",
+            }
+        );
+
+        if (hfResponse.status === 200) {
+            results.huggingface = { status: "online", message: "Flux.1 is active." };
+        } else if (hfResponse.status === 503) {
+            results.huggingface = { status: "loading", message: "Flux is warming up (503)." };
+        } else {
+            const errData = await hfResponse.json();
+            results.huggingface = { status: "offline", message: errData.error || "Unknown Error" };
+        }
+    } catch (e: any) {
+        results.huggingface = { status: "offline", message: e.message };
+    }
+
+    return NextResponse.json(results);
 }
